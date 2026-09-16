@@ -1,22 +1,24 @@
 //! Config update command.
 //!
-//! Updates deprecated settings in user and project config files by
-//! re-migrating in memory and overwriting the file. The previous `.new` file
-//! flow was removed — nothing writes to disk outside this command.
+//! Computes user- and project-config migrations in memory. The default mode
+//! previews and applies them atomically; output mode writes one migration
+//! artifact to the named destination instead. The previous `.new` file flow
+//! was removed — nothing writes to disk outside this command.
 
 use std::fmt::Write as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use anyhow::Context;
+use anyhow::{Context, bail};
 use color_print::cformat;
 use worktrunk::config::{
     ConfigFileKind, DeprecationInfo, DeprecationKind, compute_migrated_content, config_path,
     copy_approved_commands_to_approvals_file, format_deprecation_warnings, format_migration_diff,
 };
-use worktrunk::git::Repository;
+use worktrunk::git::{Repository, resolve_input_path};
+use worktrunk::path::{format_path_for_display, paths_match};
 use worktrunk::styling::{
-    eprint, eprintln, format_bash_with_gutter, hint_message, info_message, print, println,
-    success_message, suggest_command_in_dir,
+    eprint, eprintln, format_bash_with_gutter, hint_message, info_message, print, success_message,
+    suggest_command_in_dir, warning_message,
 };
 
 use crate::output::prompt::{PromptResponse, prompt_yes_no_preview};
@@ -34,43 +36,24 @@ struct UpdateCandidate {
 }
 
 /// Handle the `wt config update` command.
-pub fn handle_config_update(yes: bool, print: bool) -> anyhow::Result<()> {
+pub fn handle_config_update(yes: bool, output: Option<PathBuf>) -> anyhow::Result<()> {
     let mut candidates = Vec::new();
+    let read_only = output.is_some();
 
     if let Some(candidate) = check_user_config()? {
         candidates.push(candidate);
     }
-    if let Some(candidate) = check_project_config()? {
+    if let Some(candidate) = check_project_config(read_only)? {
         candidates.push(candidate);
     }
 
-    if candidates.is_empty() {
-        if print {
-            // --print on a clean config is a no-op; stay quiet on stdout.
-            return Ok(());
-        }
-        eprintln!("{}", info_message("No deprecated settings found"));
+    if let Some(output) = output {
+        write_migrated_output(&output, &candidates)?;
         return Ok(());
     }
 
-    if print {
-        // Emit migrated content to stdout. Multiple configs → separate with a
-        // labeled header so the output is still parseable. `--print` is for
-        // piping, so stderr stays empty.
-        let multi = candidates.len() > 1;
-        for (idx, candidate) in candidates.iter().enumerate() {
-            if multi {
-                if idx > 0 {
-                    println!();
-                }
-                println!(
-                    "# {} ({})",
-                    candidate.info.label(),
-                    candidate.config_path.display()
-                );
-            }
-            print!("{}", candidate.migrated);
-        }
+    if candidates.is_empty() {
+        eprintln!("{}", info_message("No deprecated settings found"));
         return Ok(());
     }
 
@@ -79,12 +62,38 @@ pub fn handle_config_update(yes: bool, print: bool) -> anyhow::Result<()> {
     }
 
     if !yes {
+        // Separate the prompt from the previews above; prompt_yes_no_preview
+        // emits no leading blank of its own.
+        eprintln!();
         match prompt_yes_no_preview("Apply updates?", || {})? {
             PromptResponse::Accepted => {}
             PromptResponse::Declined => {
                 eprintln!("{}", info_message("Update cancelled"));
                 return Ok(());
             }
+        }
+    }
+
+    // A preview authorizes migrating the content it was computed from. An edit
+    // that completes while the prompt is open would be replaced by that earlier
+    // snapshot, so re-read each config and fail rather than publish a stale
+    // migration. Every candidate is checked before any is written, so one
+    // superseded config can't leave the other half-applied. The window between
+    // this check and the rename stays open to a non-cooperating editor, the same
+    // boundary the shell-config writes accept.
+    for candidate in &candidates {
+        let current = std::fs::read_to_string(&candidate.config_path).with_context(|| {
+            format!(
+                "Failed to re-read {}",
+                candidate.info.label().to_lowercase()
+            )
+        })?;
+        if current != candidate.original {
+            bail!(cformat!(
+                "{} changed @ <bold>{}</> since the preview; re-run <bold>wt config update</> to migrate the current contents",
+                candidate.info.label(),
+                format_path_for_display(&candidate.config_path)
+            ));
         }
     }
 
@@ -120,6 +129,104 @@ pub fn handle_config_update(yes: bool, print: bool) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// Write the migration artifact to a path, or to stdout when the path is `-`.
+///
+/// The two destinations differ in what they can carry, so they run as separate
+/// paths rather than one path testing `-` at each step. Stdout labels and
+/// concatenates every candidate and needs no confirmation — the artifact is
+/// right there. A file takes exactly one migration, so the checks below and
+/// the confirmation can name the config it came from.
+fn write_migrated_output(output: &Path, candidates: &[UpdateCandidate]) -> anyhow::Result<()> {
+    if output == Path::new("-") {
+        for candidate in candidates {
+            eprint!("{}", format_dropped_approvals_warning(candidate));
+        }
+        print!("{}", format_migrated_output(candidates));
+        return Ok(());
+    }
+
+    if candidates.is_empty() {
+        eprintln!("{}", info_message("No deprecated settings found"));
+        return Ok(());
+    }
+
+    let [candidate] = candidates else {
+        bail!(cformat!(
+            "Cannot write <bold>user config</> and <bold>project config</> migrations to one file; use <bold>--output=-</> to inspect both or run <bold>wt config update</> to apply them in place"
+        ));
+    };
+
+    let output = resolve_input_path(output);
+    if drops_approved_commands(candidate) && paths_match(&output, &candidate.config_path) {
+        bail!(cformat!(
+            "Cannot overwrite <bold>{}</> with <bold>--output</>; run <bold>wt config update</> to apply the migration in place",
+            candidate.info.label().to_lowercase()
+        ));
+    }
+
+    eprint!("{}", format_dropped_approvals_warning(candidate));
+
+    let artifact = format_migrated_output(candidates);
+    worktrunk::utils::write_atomically(&output, &artifact).with_context(|| {
+        format!(
+            "Failed to write output @ {}",
+            format_path_for_display(&output)
+        )
+    })?;
+    eprintln!(
+        "{}",
+        success_message(format!(
+            "Wrote {} migration @ {}",
+            candidate.info.label().to_lowercase(),
+            format_path_for_display(&output)
+        ))
+    );
+    Ok(())
+}
+
+/// Format the migration artifact shared by file and stdout destinations.
+fn format_migrated_output(candidates: &[UpdateCandidate]) -> String {
+    let mut artifact = String::new();
+    let multi = candidates.len() > 1;
+
+    for (idx, candidate) in candidates.iter().enumerate() {
+        if multi {
+            if idx > 0 {
+                artifact.push('\n');
+            }
+            let _ = writeln!(
+                artifact,
+                "# {} ({})",
+                candidate.info.label(),
+                candidate.config_path.display()
+            );
+        }
+        artifact.push_str(&candidate.migrated);
+    }
+
+    artifact
+}
+
+fn format_dropped_approvals_warning(candidate: &UpdateCandidate) -> String {
+    if !drops_approved_commands(candidate) {
+        return String::new();
+    }
+    format!(
+        "{}\n",
+        warning_message(cformat!(
+            "Output omits deprecated <bold>approved-commands</>; run <underline>wt config update</> to migrate them to approvals.toml"
+        ))
+    )
+}
+
+fn drops_approved_commands(candidate: &UpdateCandidate) -> bool {
+    candidate
+        .info
+        .deprecations
+        .iter()
+        .any(|kind| matches!(kind, DeprecationKind::ApprovedCommands))
 }
 
 /// Format update preview for display.
@@ -168,7 +275,7 @@ fn check_user_config() -> anyhow::Result<Option<UpdateCandidate>> {
         return Ok(None);
     };
 
-    let migrated = compute_migrated_content(&original, ConfigFileKind::User);
+    let migrated = compute_migrated_content(&original);
     Ok(Some(UpdateCandidate {
         config_path,
         original,
@@ -177,7 +284,7 @@ fn check_user_config() -> anyhow::Result<Option<UpdateCandidate>> {
     }))
 }
 
-fn check_project_config() -> anyhow::Result<Option<UpdateCandidate>> {
+fn check_project_config(read_only: bool) -> anyhow::Result<Option<UpdateCandidate>> {
     let repo = match Repository::current() {
         Ok(repo) => repo,
         Err(_) => return Ok(None),
@@ -192,6 +299,7 @@ fn check_project_config() -> anyhow::Result<Option<UpdateCandidate>> {
     }
 
     let is_linked = repo.current_worktree().is_linked().unwrap_or(true);
+    let actionable = read_only || !is_linked;
 
     let original =
         std::fs::read_to_string(&config_path).context("Failed to read project config")?;
@@ -199,7 +307,7 @@ fn check_project_config() -> anyhow::Result<Option<UpdateCandidate>> {
     let result = worktrunk::config::check_and_migrate(
         &config_path,
         &original,
-        !is_linked, // only actionable from main worktree
+        actionable,
         ConfigFileKind::Project,
         Some(&repo),
         false,
@@ -209,14 +317,14 @@ fn check_project_config() -> anyhow::Result<Option<UpdateCandidate>> {
         return Ok(None);
     };
 
-    if is_linked {
+    if !actionable {
         let cmd = suggest_command_in_dir(repo.repo_path()?, "config", &["update"], &[]);
         eprintln!("{}", hint_message("To update project config:"));
         eprintln!("{}", format_bash_with_gutter(&cmd));
         return Ok(None);
     }
 
-    let migrated = compute_migrated_content(&original, ConfigFileKind::Project);
+    let migrated = compute_migrated_content(&original);
     Ok(Some(UpdateCandidate {
         config_path,
         original,

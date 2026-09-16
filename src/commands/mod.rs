@@ -39,9 +39,9 @@ pub(crate) use config::{
     handle_claude_uninstall, handle_codex_install, handle_codex_uninstall, handle_config_create,
     handle_config_show, handle_config_update, handle_hints_clear, handle_hints_get,
     handle_logs_list, handle_logs_profile, handle_opencode_install, handle_opencode_uninstall,
-    handle_state_clear, handle_state_clear_all, handle_state_get, handle_state_set,
-    handle_state_show, handle_vars_clear, handle_vars_get, handle_vars_list, handle_vars_set,
-    list_approvals,
+    handle_pi_install, handle_pi_uninstall, handle_state_clear, handle_state_clear_all,
+    handle_state_get, handle_state_set, handle_state_show, handle_vars_clear, handle_vars_get,
+    handle_vars_list, handle_vars_set, list_approvals,
 };
 pub(crate) use configure_shell::{
     handle_configure_shell, handle_show_theme, handle_unconfigure_shell,
@@ -117,9 +117,13 @@ pub(crate) fn did_you_mean(
 
 /// Return visible subcommand names of `parent` plus `alias_names`, filtered to
 /// those similar to `name`. Hidden subcommands (e.g., deprecated aliases) and
-/// clap's implicit `help` are excluded. Shared by the top-level (`wt <typo>`)
-/// and `wt step <typo>` suggestion paths — both surfaces want "visible
-/// built-ins + configured aliases" as the candidate pool.
+/// clap's implicit `help` are excluded, and `name` itself never appears: some
+/// dispatch paths reach this error with the input present in the candidate
+/// pool (a user-config alias outside a repository, or one whose args skipped
+/// alias dispatch as non-UTF-8), and "did you mean the thing you typed" is
+/// never a useful tip. Shared by the top-level (`wt <typo>`) and
+/// `wt step <typo>` suggestion paths — both surfaces want "visible built-ins +
+/// configured aliases" as the candidate pool.
 pub(crate) fn similar_subcommands(
     name: &str,
     parent: &clap::Command,
@@ -130,7 +134,12 @@ pub(crate) fn similar_subcommands(
         .filter(|c| !c.is_hide_set())
         .map(|c| c.get_name().to_string())
         .filter(|candidate| candidate != "help");
-    did_you_mean(name, builtins.chain(alias_names.iter().cloned()))
+    did_you_mean(
+        name,
+        builtins
+            .chain(alias_names.iter().cloned())
+            .filter(|candidate| candidate != name),
+    )
 }
 
 /// Build a clap `InvalidSubcommand` error anchored on `anchor`, populating the

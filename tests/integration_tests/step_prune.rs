@@ -396,12 +396,19 @@ fn test_prune_orphan_branches(mut repo: TestRepo) {
 
 /// Orphan branches (no worktree) respect the min-age guard via reflog timestamps.
 ///
-/// GIT_COMMITTER_DATE=2025-01-01T00:00:00Z makes the branch reflog timestamp
-/// epoch 1735689600. Setting TEST_EPOCH to 30 minutes later (1735691400) means
-/// the branch appears 30 minutes old, which is younger than the default 1d.
+/// The branch is created at GIT_COMMITTER_DATE=2025-01-01T00:00:00Z, so its
+/// reflog entry is epoch 1735689600, and TEST_EPOCH 30 minutes later
+/// (1735691400) makes it 30 minutes old, younger than the default 1d. The
+/// commit it points at is a month older: the guard ages the branch, not the
+/// commit, so `git branch <name> main` on a days-old tip still counts as new.
 #[rstest]
 fn test_prune_orphan_branch_min_age(repo: TestRepo) {
-    repo.commit("initial");
+    repo.git_command()
+        .env("GIT_AUTHOR_DATE", "2024-12-01T00:00:00Z")
+        .env("GIT_COMMITTER_DATE", "2024-12-01T00:00:00Z")
+        .args(["commit", "--allow-empty", "-m", "initial"])
+        .run()
+        .unwrap();
 
     // Create a branch at HEAD (integrated) without a worktree
     repo.create_branch("orphan-integrated");
@@ -581,14 +588,26 @@ fn test_prune_min_age_passes(mut repo: TestRepo) {
     assert_cmd_snapshot!(cmd);
 }
 
-/// Prune skips worktrees with uncommitted changes
+/// Prune skips worktrees with uncommitted changes even when the user's status
+/// display preference hides the only untracked file.
 #[rstest]
 fn test_prune_skips_dirty(mut repo: TestRepo) {
     repo.commit("initial");
+    repo.run_git(&["config", "status.showUntrackedFiles", "no"]);
 
-    // Merged worktree with uncommitted changes — should be skipped
+    // Merged worktree with an untracked file hidden from bare status.
     let wt_path = repo.add_worktree("dirty-merged");
     std::fs::write(wt_path.join("scratch.txt"), "wip").unwrap();
+    let status = repo
+        .git_command()
+        .args(["status", "--porcelain"])
+        .current_dir(&wt_path)
+        .run()
+        .unwrap();
+    assert!(
+        status.stdout.is_empty(),
+        "the fixture must demonstrate that the user setting hides the file"
+    );
 
     // Clean merged worktree — should be pruned
     repo.add_worktree("clean-merged");
@@ -602,6 +621,11 @@ fn test_prune_skips_dirty(mut repo: TestRepo) {
 
     // Dirty worktree still exists
     assert!(wt_path.exists(), "Dirty worktree should be skipped");
+    assert_eq!(
+        std::fs::read_to_string(wt_path.join("scratch.txt")).unwrap(),
+        "wip",
+        "the hidden untracked file must remain recoverable"
+    );
 
     // Clean worktree removed (non-current — no placeholder)
     let clean_path = repo.root_path().parent().unwrap().join("repo.clean-merged");

@@ -103,11 +103,24 @@ fn test_merge_help_describes_exact_shape_no_rebase() {
 #[case("help_config_shell", "config shell --help")]
 #[case("help_config_create", "config create --help")]
 #[case("help_config_show", "config show --help")]
+#[case("help_config_update", "config update --help")]
 #[case("help_config_plugins", "config plugins --help")]
 #[case("help_config_plugins_codex", "config plugins codex --help")]
 #[case(
     "help_config_plugins_codex_install",
     "config plugins codex install --help"
+)]
+// The uninstall pages describe when each command skips, which depends on what
+// the harness's config still holds. Snapshot them so that text cannot drift
+// away from the handlers the way it did when the marketplace removal became
+// reachable with the plugin already gone.
+#[case(
+    "help_config_plugins_claude_uninstall",
+    "config plugins claude uninstall --help"
+)]
+#[case(
+    "help_config_plugins_codex_uninstall",
+    "config plugins codex uninstall --help"
 )]
 #[case("help_config_state", "config state --help")]
 #[case("help_config_state_cache", "config state cache --help")]

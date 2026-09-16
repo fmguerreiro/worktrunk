@@ -3,7 +3,7 @@
 //! This module handles locating shell configuration files (e.g., `.bashrc`, `.zshrc`)
 //! and completion directories for different shells.
 
-use etcetera::base_strategy::{BaseStrategy, choose_base_strategy};
+use etcetera::base_strategy::{BaseStrategy, Xdg, choose_base_strategy};
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
@@ -209,6 +209,56 @@ pub fn powershell_profile_paths(home: &std::path::Path) -> Vec<PathBuf> {
     }
 }
 
+/// The directory fish reads its configuration from — fish's own
+/// `$__fish_config_dir`: `$XDG_CONFIG_HOME/fish` when that variable holds an
+/// absolute path, otherwise `~/.config/fish`. `etcetera`'s [`Xdg`] strategy is
+/// that rule, so nothing about it is restated here.
+///
+/// [`Xdg`] rather than `choose_base_strategy`, which resolves `%APPDATA%` on
+/// Windows: fish has no `%APPDATA%` notion on any platform, so one directory
+/// holds the wrapper and the completion there too. It isn't one a Windows fish
+/// reads — `Xdg::new` takes its home from `std::env::home_dir`, which is
+/// `%USERPROFILE%` there and, since Rust 1.85, deliberately not the POSIX
+/// `$HOME` a Cygwin or MSYS fish runs under. The two strategies are the same
+/// everywhere else.
+///
+/// Every path fish itself reads goes through this one function — the wrapper
+/// (`config_paths`) and the completion (`completion_path`) — because they have
+/// to agree. Resolving the wrapper's directory separately from the completion's
+/// put the wrapper under `~/.config/fish` whenever `$XDG_CONFIG_HOME` pointed
+/// anywhere else, which fish never reads, while the completion landed in the
+/// directory it does read; install reported success for both and `wt` was never
+/// defined. `legacy_fish_conf_d_path` is deliberately not one of these — see
+/// its own note.
+pub fn fish_config_dir(home: &std::path::Path) -> PathBuf {
+    Xdg::new()
+        .map(|xdg| xdg.config_dir())
+        .unwrap_or_else(|_| home.join(".config"))
+        .join("fish")
+}
+
+/// The directory worktrunk reads and writes zsh's rc file in: `$ZDOTDIR` when
+/// it holds an absolute path, otherwise `$HOME`.
+///
+/// zsh's rule is `$ZDOTDIR`, or `$HOME` when it is unset. The absolute-only
+/// guard on top is the same one this module already applies to
+/// `$XDG_DATA_HOME` ([`nushell_data_dir_fallback`]) and, through etcetera's
+/// [`Xdg`], to `$XDG_CONFIG_HOME` ([`fish_config_dir`]).
+///
+/// A non-absolute value resolves against the current directory, and that
+/// directory is `wt`'s: zsh resolves one against *zsh's* own startup
+/// directory, which `wt` has no way to know at install time. Honouring it
+/// would send install, and the whole-file rewrite `wt config shell uninstall`
+/// performs, to a file neither side meant — a `.zshrc` in a dotfiles checkout
+/// that happened to be the invocation directory. `$HOME` is also where
+/// `wt config show` reads back from, so install and detection agree.
+pub(super) fn zsh_config_dir(home: &std::path::Path) -> PathBuf {
+    std::env::var_os("ZDOTDIR")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .unwrap_or_else(|| home.to_path_buf())
+}
+
 /// Rc/profile files scanned line-by-line for integration lines.
 ///
 /// Bash/Zsh/PowerShell integration is one line in an rc file, so these paths
@@ -221,12 +271,7 @@ pub fn line_based_config_paths(shell: super::Shell, home: &std::path::Path) -> V
             // Use .bashrc - sourced by interactive shells (login shells should source .bashrc)
             vec![home.join(".bashrc")]
         }
-        super::Shell::Zsh => {
-            let zdotdir = std::env::var("ZDOTDIR")
-                .map(PathBuf::from)
-                .unwrap_or_else(|_| home.to_path_buf());
-            vec![zdotdir.join(".zshrc")]
-        }
+        super::Shell::Zsh => vec![zsh_config_dir(home).join(".zshrc")],
         super::Shell::PowerShell => powershell_profile_paths(home),
         super::Shell::Fish | super::Shell::Nushell => Vec::new(),
     }
@@ -249,8 +294,7 @@ pub(super) fn config_paths(shell: super::Shell, cmd: &str) -> Result<Vec<PathBuf
             // fixing the issue where Homebrew PATH setup in config.fish runs
             // after conf.d/ files. See: https://github.com/max-sixty/worktrunk/issues/566
             vec![
-                home.join(".config")
-                    .join("fish")
+                fish_config_dir(&home)
                     .join("functions")
                     .join(format!("{}.fish", cmd)),
             ]
@@ -275,6 +319,15 @@ pub(super) fn config_paths(shell: super::Shell, cmd: &str) -> Result<Vec<PathBuf
 /// This caused issues with Homebrew PATH setup (see issue #566). We now install to
 /// `functions/{cmd}.fish` instead. This method returns the legacy path so install/uninstall
 /// can clean it up.
+///
+/// Hardcoded to `~/.config`, unlike [`fish_config_dir`], because this names a
+/// file worktrunk *wrote*, not a file fish reads: the write was hardcoded for
+/// as long as it existed, and install removes what this resolves to whole and
+/// unread. Resolving it through `$XDG_CONFIG_HOME` would both stop finding the
+/// stranded file and start deleting a `conf.d/{cmd}.fish` in the directory fish
+/// actually loads — one worktrunk never wrote and whose contents are never
+/// read. Uninstall's directory scan is gated on worktrunk-managed content and
+/// carries no such constraint.
 pub(super) fn legacy_fish_conf_d_path(cmd: &str) -> Result<PathBuf, std::io::Error> {
     let home = home_dir_required()?;
     Ok(home
@@ -311,16 +364,9 @@ pub(super) fn completion_path(shell: super::Shell, cmd: &str) -> Result<PathBuf,
                 .join(cmd)
         }
         super::Shell::Zsh => home.join(".zfunc").join(format!("_{}", cmd)),
-        super::Shell::Fish => {
-            let config_home = strategy
-                .as_ref()
-                .map(|s| s.config_dir())
-                .unwrap_or_else(|| home.join(".config"));
-            config_home
-                .join("fish")
-                .join("completions")
-                .join(format!("{}.fish", cmd))
-        }
+        super::Shell::Fish => fish_config_dir(&home)
+            .join("completions")
+            .join(format!("{}.fish", cmd)),
         super::Shell::Nushell => {
             // Nushell completions are defined inline in the init script.
             // Return the canonical vendor-autoload path (same as config).

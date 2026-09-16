@@ -25,10 +25,18 @@ npm --prefix docs run build
 npm --prefix docs run test:site
 ```
 
-`npm run build` clears Astro's content cache, writes `docs/dist/`, and builds
-the Pagefind search index. The forced content rebuild is intentional: renderer
-plugin changes affect generated asset hashes but are not part of Astro's
-content-cache key.
+`npm run build` writes `docs/dist/` and builds the Pagefind search index. Both
+`build` and `dev` pass `--force`, which clears Astro's content cache before
+rendering. Cached pages carry the URL of the Expressive Code stylesheet, whose
+hash comes from the code-rendering configuration and plugins, and Astro's cache
+key covers neither: a stale page links a stylesheet the server no longer serves,
+and every code block renders unstyled.
+
+The cache is cleared only when the server starts. When `astro.config.mjs`
+changes under a running dev server, through an edit or a merge, Astro restarts
+the server in place but keeps rendering content with the renderer it started
+with, and pages break the same way. Restart it with `wt hook post-start docs`;
+the new `astro dev --force` replaces the running server.
 
 ### Verifying changes
 
@@ -87,8 +95,9 @@ Use root-relative links in canonical Markdown:
 
 The sync pipeline expands them to full `https://worktrunk.dev/...` URLs for
 README and agent-skill copies. Do not add framework-specific link syntax.
-`stable-heading-ids.mjs` preserves the site's established anchor scheme, and
-`test:site` verifies every built internal page link and fragment.
+`stable-heading-ids.mjs` defines the heading-anchor scheme, including the ids
+scoped under each subcommand section, and `test:site` verifies every built
+internal page link and fragment.
 
 Images and demos use root-relative paths into `public/`:
 
@@ -114,12 +123,12 @@ There are three source categories:
    region in `docs/src/content/docs/{command}.md`, then generates the matching
    `skills/worktrunk/reference/` page.
 2. **Non-command pages**: files such as `claude-code.md`, `extending.md`,
-   `faq.md`, `llm-commits.md`, `tips-patterns.md`, and `worktrunk.md` are primary
-   in `docs/src/content/docs/`. The sync test derives the skill copy.
-3. **Skill-only pages**: files such as `shell-integration.md` and
-   `troubleshooting.md` are primary in `skills/worktrunk/reference/` and have no
-   site page. When adding one, add a `linguist-generated=false` entry to
-   `.gitattributes`.
+   `faq.md`, `llm-commits.md`, `shell-integration.md`, `tips-patterns.md`, and
+   `worktrunk.md` are primary in `docs/src/content/docs/`. The sync test derives
+   the skill copy.
+3. **Skill-only pages**: `troubleshooting.md` is primary in
+   `skills/worktrunk/reference/` and has no site page. When adding one, add a
+   `linguist-generated=false` entry to `.gitattributes`.
 
 Never hand-edit a generated mirror.
 
@@ -221,13 +230,16 @@ $ wt switch --create feature-auth
 
 Starlight and Expressive Code create the frame and copy button. The Worktrunk
 plugin highlights `console` commands as Bash, renders `$ ` as a prompt, and
-makes mixed blocks copy only their commands. Comment lines and blank recipe
-separators remain copyable; captured output does not. Snapshot-backed output
-gets its exact ANSI roles from the generated style manifest, while hand-written
-output uses a conservative marker fallback. Generated Clap help fences carry
-the `wt-command-reference` marker, which the plugin expands into semantic
-command, option, value, and metadata roles. Committed Markdown must remain
-useful without the plugin.
+makes blocks copy their commands rather than their output. A block with one
+command copies it with its comment lines and blank recipe separators; a block
+with several gives each command its own copy button. Copied shell commands
+leave out trailing `#` comments, which zsh passes as arguments unless
+`interactivecomments` is set. Snapshot-backed output gets its exact ANSI roles
+from the generated style manifest, while hand-written output uses a
+conservative marker fallback. Generated Clap help fences carry the
+`wt-command-reference` marker, which the plugin expands into semantic command,
+option, value, and metadata roles. Committed Markdown must remain useful
+without the plugin.
 
 ### Web-only post-processing
 

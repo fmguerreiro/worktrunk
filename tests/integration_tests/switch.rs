@@ -939,6 +939,85 @@ fn test_switch_execute_does_not_inherit_git_discovery_vars(mut repo: TestRepo) {
     );
 }
 
+/// `--no-cd` starts the `--execute` program in the invoking directory, so the
+/// "Executing (--execute) @ …" header must not name the new worktree. The path
+/// it renders is the one the background hooks run in; the program never enters
+/// it, and naming it there sent a reporter looking for a broken template
+/// variable instead of the directory the flag moved (issue #4042).
+#[rstest]
+fn test_switch_no_cd_execute_header_omits_worktree_path(mut repo: TestRepo) {
+    repo.add_worktree("feature");
+
+    let output = repo
+        .wt_command()
+        .args(["switch", "feature", "--no-cd", "--execute", "pwd"])
+        .current_dir(repo.root_path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "switch --no-cd --execute failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let header = stderr
+        .lines()
+        .find(|line| line.contains("Executing (--execute)"))
+        .unwrap_or_else(|| panic!("no --execute header in stderr:\n{stderr}"));
+    assert!(
+        !header.contains('@'),
+        "--no-cd runs the program in the invoking directory, but the header named a path: {header}"
+    );
+}
+
+/// A switch from a subdirectory keeps the user's position, so the `--execute`
+/// program starts in `<worktree>/<subdir>` — not at the worktree root the
+/// background hooks run in. The header names the program's own directory
+/// (issue #4042), which is the same claim `--no-cd` breaks one tree over.
+#[rstest]
+fn test_switch_execute_header_names_preserved_subdirectory(mut repo: TestRepo) {
+    // The subdirectory has to exist in both worktrees for the position to
+    // carry over, so commit it before branching.
+    let subdir = repo.root_path().join("apps").join("gateway");
+    fs::create_dir_all(&subdir).unwrap();
+    fs::write(subdir.join("main.rs"), "fn main() {}\n").unwrap();
+    repo.run_git(&["add", "."]);
+    repo.commit("Add apps/gateway");
+    let worktree = repo.add_worktree("feature");
+    assert!(worktree.join("apps").join("gateway").is_dir());
+
+    let output = repo
+        .wt_command()
+        .args(["switch", "feature", "--execute", "pwd"])
+        .current_dir(&subdir)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "switch --execute from a subdirectory failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout).replace('\\', "/");
+    assert!(
+        stdout.trim_end().ends_with("apps/gateway"),
+        "the program should have started in the target's subdirectory: {stdout}"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let header = stderr
+        .lines()
+        .find(|line| line.contains("Executing (--execute)"))
+        .unwrap_or_else(|| panic!("no --execute header in stderr:\n{stderr}"));
+    assert!(
+        header.contains("apps/gateway"),
+        "the header named the worktree root, not the directory the program ran in: {header}"
+    );
+}
+
 /// `--execute` computes only the template variables its command names.
 ///
 /// The context map built at that call site feeds `expand_template` and nothing
@@ -8317,5 +8396,53 @@ fn switch_base_accepts_worktree_path(mut repo: TestRepo) {
     assert!(
         output.status.success() && stderr.contains("from base-branch"),
         "--base should resolve the worktree path to its branch: {stderr}"
+    );
+}
+
+#[rstest]
+fn test_switch_create_names_branch_left_by_failed_worktree_add(repo: TestRepo) {
+    // `git worktree add -b` writes the branch ref before it populates the
+    // worktree, so a failure in between leaves the branch with nothing checked
+    // out on it (issue #4108). A regular file where the worktree's leading
+    // directories would go is the portable way to fail git exactly there.
+    repo.write_test_config(r#"worktree-path = "blocked/{{ branch | sanitize }}""#);
+    fs::write(repo.root_path().join("blocked"), "not a directory").unwrap();
+
+    let output = repo
+        .wt_command()
+        .args(["switch", "--create", "stranded"])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "switch --create should fail when git cannot create the worktree"
+    );
+
+    // The branch git left behind is what makes a retry with --create report
+    // "already exists"; the first failure has to name it.
+    let branches = repo.git_output(&["branch", "--list", "stranded"]);
+    assert!(
+        branches.contains("stranded"),
+        "expected git to leave the branch behind, got: {branches:?}"
+    );
+    let worktrees = repo.git_output(&["worktree", "list", "--porcelain"]);
+    assert!(
+        !worktrees.contains("refs/heads/stranded"),
+        "expected no worktree on the leftover branch, got: {worktrees:?}"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr = stderr.ansi_strip();
+    assert!(
+        stderr.contains("Branch stranded was created before the failure, with no worktree"),
+        "expected the failure to name the leftover branch, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("git branch -d -- stranded"),
+        "expected a delete suggestion for the leftover branch, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("wt switch stranded"),
+        "expected a recovery suggestion for the leftover branch, got: {stderr}"
     );
 }

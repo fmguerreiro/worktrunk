@@ -5,7 +5,7 @@ use std::fmt;
 use std::path::Path;
 use std::sync::Arc;
 use worktrunk::config::CommitGenerationConfig;
-use worktrunk::git::{CommandError, CommitMessageDetail, ErrorExt, Repository};
+use worktrunk::git::{CommandError, CommitMessageDetail, ErrorExt, Repository, WorkingTree};
 use worktrunk::shell_exec::{Cmd, ShellConfig};
 
 use minijinja::Environment;
@@ -16,10 +16,12 @@ use minijinja::value::{Enumerator, Object, Value};
 ///
 /// It renders as its bare subject (`{{ detail }}` yields the subject line) so a
 /// template that iterates the list and prints the loop variable directly
-/// behaves exactly like the deprecated `commits` list of subject strings. That
-/// equivalence is what lets `wt config update` migrate a `commits` template to
-/// `commit_details` as a plain identifier rename — no shape-changing hand edits
-/// (see #2984). The `.subject` and `.body` properties remain available for
+/// behaves exactly like the retired `commits` list of subject strings. That
+/// equivalence is what lets the deprecation layer rewrite a `commits` template
+/// to `commit_details` as a plain identifier rename — on every load, and in the
+/// file itself via `wt config update` — with no shape-changing hand edits (see
+/// #2984 and `RETIRED_VARS`). The `.subject` and `.body` properties remain
+/// available for
 /// templates that want the structured form, and because minijinja coerces an
 /// object to a string via its `render`, string filters (`{{ c | upper }}`)
 /// operate on the subject too.
@@ -185,6 +187,27 @@ fn is_lock_file(filename: &str) -> bool {
         .any(|pattern| filename.ends_with(pattern))
 }
 
+/// Extract the destination path from a `diff --git` header line.
+///
+/// [`DIFF_PREFIX_OVERRIDES`] pins the prefixes to `a/` and `b/`, so the
+/// destination begins at the last ` b/` — or, when git quotes the pair,
+/// at the last ` "b/`. Quoting is not optional: `core.quotePath` escapes a
+/// non-ASCII name, and a name holding `"` or `\` is quoted whatever that
+/// setting says, so a parser that only knows the bare form fails on both.
+///
+/// The escaped form is what comes back for a quoted name — it feeds
+/// [`is_lock_file`]'s suffix match, not the filesystem — and a path that
+/// itself contains ` b/` stays ambiguous, exactly as it is in git's own
+/// plain-text output.
+fn parse_diff_header_path(line: &str) -> Option<&str> {
+    let rest = line.strip_prefix("diff --git ")?;
+    if let Some(index) = rest.rfind(" \"b/") {
+        let path = &rest[index + 4..];
+        return Some(path.strip_suffix('"').unwrap_or(path));
+    }
+    rest.rfind(" b/").map(|index| &rest[index + 3..])
+}
+
 /// Parse a diff into individual file sections
 ///
 /// Returns Vec of (filename, diff_content) pairs
@@ -212,8 +235,10 @@ fn parse_diff_sections(diff: &str) -> Vec<(&str, &str)> {
                 sections.push((file, &diff[section_start_byte..current_byte]));
             }
 
-            // Extract filename from "diff --git a/path b/path"
-            current_file = line.split(" b/").nth(1);
+            // A header opens a section whether or not its path parses: the
+            // name only feeds lock-file filtering, while treating the section
+            // as absent drops the file's diff from the prompt entirely.
+            current_file = Some(parse_diff_header_path(line).unwrap_or(""));
             section_start_byte = current_byte;
         }
         current_byte += full_line.len();
@@ -561,9 +586,11 @@ enum TemplateType {
 ///   subject when printed bare and exposes `.subject` / `.body` properties.
 ///   Capped at [`MAX_SQUASH_COMMITS`]; the older tail is represented by one
 ///   synthetic "(N earlier commits omitted)" entry.
-/// - `commits`: Commit subjects being squashed (deprecated — see #2984;
-///   `wt config update` rewrites it to `commit_details`)
 /// - `target_branch`: Target branch for merge
+///
+/// The retired `commits` variable is not supplied: the deprecation layer
+/// rewrites it to `commit_details` before serde parses the config, so an
+/// unmigrated template still renders its commit list (see `RETIRED_VARS`).
 fn build_prompt(
     config: &CommitGenerationConfig,
     template_type: TemplateType,
@@ -598,15 +625,14 @@ fn build_prompt(
 
     // Reverse commits so they're in chronological order (oldest first).
     //
-    // `commits` (a list of bare subject strings) is deprecated in favor of
-    // `commit_details` (see #2984). The deprecation warning and the
-    // `wt config update` rewrite both go through the standard config
-    // deprecation framework (`DEPRECATED_VARS`), so nothing is detected or
-    // warned here — `commits` is simply still rendered for templates that
-    // haven't migrated yet. The rename is safe because each `commit_details`
-    // element renders as its subject (see `CommitDetailValue`), so a migrated
-    // `{% for c in commit_details %}{{ c }}` reads identically to the old
-    // `{% for c in commits %}{{ c }}`.
+    // `commit_details` is the only commit list supplied. The retired `commits`
+    // variable (a list of bare subject strings) is handled entirely by the
+    // config deprecation layer (`RETIRED_VARS`), which rewrites it to
+    // `commit_details` on every load and warns, so an unmigrated template
+    // arrives here already renamed — nothing is detected or warned here. The
+    // rename is safe because each `commit_details` element renders as its
+    // subject (see `CommitDetailValue`), so `{% for c in commit_details %}{{ c
+    // }}` reads identically to the old `{% for c in commits %}{{ c }}`.
     //
     // The list is capped at `MAX_SQUASH_COMMITS` — the one prompt input the
     // diff budget doesn't bound. Details arrive newest-first, so the newest
@@ -624,10 +650,6 @@ fn build_prompt(
     let details_chronological: Vec<&CommitMessageDetail> = synthetic_tail
         .iter()
         .chain(kept_details.iter().rev())
-        .collect();
-    let commits_chronological: Vec<&String> = details_chronological
-        .iter()
-        .map(|detail| &detail.subject)
         .collect();
     let commit_details_chronological: Vec<Value> = details_chronological
         .iter()
@@ -657,7 +679,6 @@ fn build_prompt(
             branch => context.branch,
             recent_commits => context.recent_commits.unwrap_or(&empty_commits),
             repo => context.repo_name,
-            commits => &commits_chronological,
             commit_details => &commit_details_chronological,
             target_branch => context.target_branch.unwrap_or(""),
         })?)
@@ -682,7 +703,6 @@ fn build_prompt(
         branch => context.branch,
         recent_commits => context.recent_commits.unwrap_or(&empty_commits),
         repo => context.repo_name,
-        commits => commits_chronological,
         commit_details => commit_details_chronological,
         target_branch => context.target_branch.unwrap_or(""),
         user_guidance => user_guidance,
@@ -692,6 +712,11 @@ fn build_prompt(
     Ok(rendered)
 }
 
+/// `wt` is the worktree being committed — the diff, branch, and history all
+/// come from there. It is not always the invoking worktree: `wt step commit
+/// --branch <b>` and `wt step relocate --commit` commit somewhere else, and
+/// reading the diff from the cwd instead handed the LLM an empty diff.
+///
 /// `index_override` is forwarded to git operations that read the staging area, so
 /// `--dry-run` can preview against a temp index without touching the user's real one.
 ///
@@ -702,6 +727,7 @@ fn build_prompt(
 /// separately into `<user-guidance>`.
 pub(crate) fn generate_commit_message(
     commit_generation_config: &CommitGenerationConfig,
+    wt: &WorkingTree<'_>,
     index_override: Option<&Path>,
     project_append: Option<&str>,
 ) -> anyhow::Result<String> {
@@ -711,7 +737,8 @@ pub(crate) fn generate_commit_message(
         // Prompt-build failures (git plumbing) propagate as-is; only a
         // failure of the LLM command itself gets the `LlmCommandFailed`
         // wrapper — mirroring `generate_squash_message`.
-        let prompt = build_commit_prompt(commit_generation_config, index_override, project_append)?;
+        let prompt =
+            build_commit_prompt(commit_generation_config, wt, index_override, project_append)?;
         // A slow or hung command is otherwise silent (stdout is captured); the
         // watchdog surfaces a "still waiting" status. Held until this function
         // returns, clearing the block before the caller prints the message.
@@ -731,10 +758,9 @@ pub(crate) fn generate_commit_message(
     }
 
     // Fallback: generate a descriptive commit message based on changed files
-    let repo = Repository::current()?;
     let file_list = run_git_capture(
         &["diff", "--staged", "--name-only", "-z"],
-        repo.discovery_path(),
+        wt.path(),
         index_override,
     )?;
     let staged_files = file_list
@@ -793,16 +819,19 @@ fn run_git_capture(
 /// the prompt template. Used by normal commit generation, `--show-prompt`, and
 /// `--dry-run`.
 ///
+/// Every input is read from `wt`, the worktree being committed — which is not
+/// always the invoking one (see [`generate_commit_message`]).
+///
 /// `index_override` points git at an alternate index via `GIT_INDEX_FILE` — used by
 /// `--dry-run` to preview what `git add` per the user's `--stage` flag would produce
 /// without modifying the real index.
 pub(crate) fn build_commit_prompt(
     config: &CommitGenerationConfig,
+    wt: &WorkingTree<'_>,
     index_override: Option<&Path>,
     project_append: Option<&str>,
 ) -> anyhow::Result<String> {
-    let repo = Repository::current()?;
-    let cwd = repo.discovery_path();
+    let cwd = wt.path();
 
     let mut diff_args: Vec<&str> = DIFF_PREFIX_OVERRIDES.to_vec();
     diff_args.extend(["--no-pager", "diff", "--staged"]);
@@ -816,8 +845,7 @@ pub(crate) fn build_commit_prompt(
     // Prepare diff (may filter if too large)
     let prepared = prepare_diff(diff_output, diff_stat);
 
-    // Get current branch and repo root
-    let wt = repo.current_worktree();
+    // Get the committed branch and its worktree root
     let current_branch = wt.branch()?.unwrap_or_else(|| "HEAD".to_string());
     let repo_root = wt.root()?;
     let repo_name = repo_root
@@ -825,7 +853,7 @@ pub(crate) fn build_commit_prompt(
         .and_then(|n| n.to_str())
         .unwrap_or("repo");
 
-    let recent_commits = repo.recent_commit_subjects(None, 5);
+    let recent_commits = wt.recent_commit_subjects(None, 5);
 
     let context = PromptContext {
         git_diff: &prepared.diff,
@@ -913,7 +941,9 @@ pub(crate) fn build_squash_prompt(
     // Prepare diff (may filter if too large)
     let prepared = prepare_diff(diff_output, diff_stat);
 
-    let recent_commits = repo.recent_commit_subjects(Some(merge_base), 5);
+    let recent_commits = repo
+        .current_worktree()
+        .recent_commit_subjects(Some(merge_base), 5);
     let context = PromptContext {
         git_diff: &prepared.diff,
         git_diff_stat: &prepared.stat,
@@ -1032,6 +1062,29 @@ mod tests {
         );
     }
 
+    /// Git failures while constructing a configured prompt surface directly;
+    /// they must not be mislabeled as a failure of the configured LLM command.
+    #[test]
+    fn test_generate_commit_message_propagates_prompt_error() {
+        let test_repo = worktrunk::testing::TestRepo::with_initial_commit();
+        let missing_path = test_repo.path().join("missing-worktree");
+        let wt = test_repo.repo.worktree_at(missing_path);
+        let config = CommitGenerationConfig {
+            command: Some("exit 99".to_string()),
+            ..Default::default()
+        };
+
+        let err = generate_commit_message(&config, &wt, None, None).unwrap_err();
+
+        assert!(
+            !matches!(
+                err.downcast_ref::<worktrunk::git::GitError>(),
+                Some(worktrunk::git::GitError::LlmCommandFailed { .. })
+            ),
+            "prompt-construction error was mislabeled as an LLM command failure: {err:#}"
+        );
+    }
+
     /// A failing LLM command must surface as a typed [`CommandError`] carrying
     /// the exit code and captured output — `LlmCommandFailed` and the summary
     /// pane read the detail via `display_message`.
@@ -1075,8 +1128,9 @@ mod tests {
 
     /// A `commit_details` element renders as its bare subject and exposes
     /// `.subject` / `.body`. This is the equivalence that lets the
-    /// `commits` → `commit_details` rename be a mechanical identifier rewrite
-    /// (see #2984 and `CommitDetailValue`).
+    /// `commits` → `commit_details` rename be a mechanical identifier rewrite,
+    /// which is what the config deprecation layer applies on every load now
+    /// that nothing supplies `commits` (see #2984 and `CommitDetailValue`).
     #[test]
     fn test_commit_detail_value_render_and_properties() {
         assert_eq!(render_with_detail("{{ c }}", "Add a", "body a"), "Add a");
@@ -1574,7 +1628,7 @@ mod tests {
             command: None,
             template: None,
             squash_template: Some(
-                "Target: {{ target_branch }}\n{% for c in commits %}{{ c }}\n{% endfor %}"
+                "Target: {{ target_branch }}\n{% for c in commit_details %}{{ c }}\n{% endfor %}"
                     .to_string(),
             ),
             template_append: None,
@@ -1643,7 +1697,7 @@ mod tests {
         let config = CommitGenerationConfig {
             command: None,
             template: None,
-            squash_template: Some("{% for x in commits %}{{ x }".to_string()),
+            squash_template: Some("{% for x in commit_details %}{{ x }".to_string()),
             template_append: None,
         };
         let commit_details = vec![];
@@ -1673,7 +1727,7 @@ mod tests {
             command: None,
             template: None,
             squash_template: Some(
-                "Repo: {{ repo }}\nBranch: {{ branch }}\nTarget: {{ target_branch }}\nDiff: {{ git_diff }}\n{% for c in commits %}{{ c }}\n{% endfor %}{% for r in recent_commits %}style: {{ r }}\n{% endfor %}"
+                "Repo: {{ repo }}\nBranch: {{ branch }}\nTarget: {{ target_branch }}\nDiff: {{ git_diff }}\n{% for c in commit_details %}{{ c }}\n{% endfor %}{% for r in recent_commits %}style: {{ r }}\n{% endfor %}"
                     .to_string(),
             ),
             template_append: None,
@@ -1771,14 +1825,14 @@ Diff follows:
             command: None,
             template: None,
             squash_template: Some(
-                r#"Squashing {{ commits | length }} commit(s) from {{ branch }} to {{ target_branch }}
-{% if commits | length > 1 -%}
+                r#"Squashing {{ commit_details | length }} commit(s) from {{ branch }} to {{ target_branch }}
+{% if commit_details | length > 1 -%}
 Multiple commits detected:
-{%- for c in commits %}
+{%- for c in commit_details %}
   {{ loop.index }}/{{ loop.length }}: {{ c }}
 {%- endfor %}
 {%- else -%}
-Single commit: {{ commits[0] }}
+Single commit: {{ commit_details[0] }}
 {%- endif %}"#
                     .to_string(),
             ),
@@ -1830,7 +1884,7 @@ Single commit: {{ commits[0] }}
         let config = CommitGenerationConfig {
             command: None,
             template: Some(
-                "Branch: {{ branch }}\nTarget: {{ target_branch }}\nCommit subjects: {{ commits | length }}\nCommit details: {{ commit_details | length }}"
+                "Branch: {{ branch }}\nTarget: {{ target_branch }}\nCommit details: {{ commit_details | length }}"
                     .to_string(),
             ),
             squash_template: None,
@@ -1841,10 +1895,7 @@ Single commit: {{ commits[0] }}
         assert!(result.is_ok());
         let prompt = result.unwrap();
         // Squash-specific variables are empty for regular commits
-        assert_eq!(
-            prompt,
-            "Branch: feature\nTarget: \nCommit subjects: 0\nCommit details: 0"
-        );
+        assert_eq!(prompt, "Branch: feature\nTarget: \nCommit details: 0");
     }
 
     // Tests for diff filtering
@@ -1915,6 +1966,68 @@ index 111..222 100644
         @@ -1,100 +1,150 @@
          lots of lock content
         ");
+    }
+
+    #[test]
+    fn test_parse_diff_sections_quoted_paths() {
+        // `core.quotePath` (git's default) quotes and octal-escapes a
+        // non-ASCII name, and a name holding `"` is quoted whatever that
+        // setting says. Neither header contains a bare ` b/`, so a parser
+        // that only knows the unquoted form found no path and dropped the
+        // file's diff from the prompt.
+        let diff = r#"diff --git "a/\303\251.txt" "b/\303\251.txt"
++accented
+diff --git "a/we\"ird.lock" "b/we\"ird.lock"
++quoted
+diff --git a/plain.rs b/plain.rs
++plain
+"#;
+
+        let sections = parse_diff_sections(diff);
+        assert_eq!(sections.len(), 3);
+        assert_eq!(sections[0].0, "\\303\\251.txt");
+        assert_eq!(sections[1].0, "we\\\"ird.lock");
+        assert_eq!(sections[2].0, "plain.rs");
+
+        // No bytes dropped: every section's content survives to the prompt.
+        let combined: String = sections.iter().map(|(_, s)| *s).collect();
+        assert_eq!(combined, diff);
+    }
+
+    #[test]
+    fn test_parse_diff_sections_unparsable_header_keeps_content() {
+        // A header we can't read a path out of still opens a section — the
+        // name only drives lock-file filtering, so losing it must not lose
+        // the diff.
+        let diff = "diff --git weird\n+kept\ndiff --git a/plain.rs b/plain.rs\n+plain\n";
+
+        let sections = parse_diff_sections(diff);
+        assert_eq!(sections.len(), 2);
+        assert_eq!(sections[0].0, "");
+        assert_eq!(sections[1].0, "plain.rs");
+        let combined: String = sections.iter().map(|(_, s)| *s).collect();
+        assert_eq!(combined, diff);
+    }
+
+    #[test]
+    fn test_prepare_diff_keeps_quoted_path_sections() {
+        // Over budget, the truncating path is what the section list feeds.
+        // A quoted-path section used to vanish from it entirely.
+        let big = "x".repeat(DIFF_BUDGET);
+        let diff = format!(
+            r#"diff --git "a/\303\251.rs" "b/\303\251.rs"
++accented
+diff --git a/plain.rs b/plain.rs
++{big}
+"#
+        );
+
+        let prepared = prepare_diff(diff, "stat".to_string());
+        assert!(
+            prepared.diff.contains("\\303\\251.rs"),
+            "quoted-path section must survive truncation:\n{}",
+            prepared.diff
+        );
     }
 
     #[test]

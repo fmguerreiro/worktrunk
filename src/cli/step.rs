@@ -79,7 +79,7 @@ pub enum StepCommand {
 $ wt step commit --branch feature
 ```
 
-The branch must have a checked-out worktree. `--branch` re-roots the whole command: staging, hooks, and the commit all happen there. It has no effect on `--dry-run`, which always previews the current worktree.
+The branch must have a checked-out worktree. `--branch` re-roots the whole command: staging, hooks, and the commit all happen there. It selects the previewed worktree the same way, so `--dry-run` describes the commit the same flags would make.
 
 ## Hooks
 
@@ -293,10 +293,10 @@ $ wt step diff | delta
 
 Equivalent to:
 
-```console
-$ cp "$(git rev-parse --git-dir)/index" /tmp/idx
-$ GIT_INDEX_FILE=/tmp/idx git add --intent-to-add .
-$ GIT_INDEX_FILE=/tmp/idx git diff $(git merge-base HEAD $(wt config state default-branch))
+```bash
+cp "$(git rev-parse --git-dir)/index" /tmp/idx
+GIT_INDEX_FILE=/tmp/idx git add --intent-to-add .
+GIT_INDEX_FILE=/tmp/idx git diff $(git merge-base HEAD $(wt config state default-branch))
 ```
 
 `git diff` ignores untracked files. `git add --intent-to-add .` registers them in the index without staging their content, making them visible to `git diff`. This runs against a copy of the real index so the original is never modified.
@@ -379,16 +379,18 @@ Without `.worktreeinclude`, the command is a no-op (it reports that nothing was 
 | Generated assets | Images, ML models, binaries too large for git |
 | Environment files | `.env` (if not generated per-worktree) |
 
-## Performance
+## Copy-on-write
 
-Reflink copies share disk blocks until modified — no data is actually copied. For a 14GB `target/` directory:
+Files are reflinked where the filesystem supports it: APFS (macOS), btrfs and XFS (Linux), ReFS (Windows). A reflinked copy shares the source's disk blocks until one side writes. For a 14GB `target/` directory:
 
-| Command | Time |
-|---------|------|
-| `cp -R` (full copy) | 2m |
-| `cp -Rc` / `wt step copy-ignored` | 20s |
+| Command | Time | Disk |
+|---------|------|------|
+| `cp -R` (full copy) | 2m | 14GB |
+| `cp -Rc` / `wt step copy-ignored` | 20s | ~0 |
 
-Uses per-file reflink (like `cp -Rc`) — copy time scales with file count.
+On ext4 and NTFS, which have no reflink, every file is copied in full. The same byte count therefore costs nothing on one filesystem and 14GB on the other, so the summary says which happened: `Copied 4,812 files · 14.0 GB (reflinked, no extra disk)`, against `(full copy)` where those bytes were written out.
+
+Reflinks are per file (like `cp -Rc`), so copy time scales with file count.
 
 Use the `post-start` hook so the copy runs in the background. Use `pre-start` instead if subsequent hooks or `--execute` command need the copied files immediately.
 
@@ -422,7 +424,6 @@ Virtual environments contain absolute paths and can't be copied. Use `uv sync` i
 The `.worktreeinclude` pattern is shared with [Claude Code on desktop](https://code.claude.com/docs/en/desktop), which copies matching files when creating worktrees. Differences:
 
 - worktrunk copies all gitignored files by default; Claude Code requires `.worktreeinclude`. Pass `--require-include` to match Claude Code (copy nothing without `.worktreeinclude`)
-- worktrunk uses copy-on-write for large directories like `target/` (see Performance above)
 - worktrunk runs as a configurable hook in the worktree lifecycle
 "#)]
     CopyIgnored {
@@ -642,11 +643,11 @@ Locked worktrees and the main worktree are always skipped. The current worktree 
 
 ## Min-age guard
 
-Worktrees and branches younger than `--min-age` (default: 1 day) are skipped. This prevents removing a worktree just created from the default branch — it looks "merged" because its branch points at the same commit.
+Candidates younger than `--min-age` (default: 1 day) are skipped. A worktree's age comes from its creation time, and a branch with no worktree takes its age from its oldest reflog entry. This prevents removing a worktree just created from the default branch: it looks "merged" because its branch points at the same commit.
 
 ```console
 $ wt step prune --min-age=0s     # no age guard
-$ wt step prune --min-age=2d     # skip worktrees younger than 2 days
+$ wt step prune --min-age=2d     # skip candidates younger than 2 days
 ```
 
 ## JSON output
