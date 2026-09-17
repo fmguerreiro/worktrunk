@@ -184,7 +184,7 @@ pub fn default_system_config_path() -> Option<PathBuf> {
 /// does for the `XDG_*_HOME` variables it resolves for us. wt has to apply the
 /// rule by hand here only because no `etcetera` accessor covers
 /// `XDG_CONFIG_DIRS`. Dropping the entry is what keeps
-/// [`resolve_input_path`](crate::git::resolve_input_path)'s reasoning true —
+/// [`resolve_input_path`]'s reasoning true —
 /// "an XDG config directory is already absolute" — and it matters more here
 /// than elsewhere: this file loads into the *user* config layer, whose hooks
 /// and aliases the approval gate deliberately doesn't cover, so a relative
