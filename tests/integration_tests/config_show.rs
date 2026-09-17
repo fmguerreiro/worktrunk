@@ -522,6 +522,17 @@ fn test_system_config_found_via_xdg_config_dirs(repo: TestRepo) {
 #[cfg(unix)]
 #[rstest]
 fn test_system_config_ignores_relative_xdg_config_dirs(repo: TestRepo, temp_home: TempDir) {
+    // `config show` renders the system-config hint only after a user config it
+    // could find, so plant one — otherwise the assertions below hold over
+    // output that says nothing about system config at all.
+    let global_config_dir = temp_home.path().join(".config").join("worktrunk");
+    fs::create_dir_all(&global_config_dir).unwrap();
+    fs::write(
+        global_config_dir.join("config.toml"),
+        "worktree-path = \"../{{ repo }}.{{ branch }}\"\n",
+    )
+    .unwrap();
+
     // The file a relative entry would reach: `./worktrunk/config.toml` under
     // the directory wt runs in.
     let planted = repo.root_path().join("worktrunk");
@@ -543,8 +554,12 @@ fn test_system_config_ignores_relative_xdg_config_dirs(repo: TestRepo, temp_home
     let output = cmd.output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
 
+    // The hint names the platform default the all-relative value fell back to,
+    // so it pins the fallback as well as the absence of the planted file.
     assert!(
-        !stdout.contains("SYSTEM CONFIG") && !stdout.contains("/planted/"),
+        !stdout.contains("SYSTEM CONFIG")
+            && !stdout.contains("/planted/")
+            && stdout.contains("Optional system config not found"),
         "A relative XDG_CONFIG_DIRS entry must not load a system config, got:\n{stdout}"
     );
 }
