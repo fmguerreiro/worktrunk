@@ -512,19 +512,15 @@ fn test_system_config_found_via_xdg_config_dirs(repo: TestRepo) {
     }
 }
 
-/// A relative `XDG_CONFIG_DIRS` entry must not become a system config path.
-///
-/// The XDG spec says to ignore a relative entry, and `resolve_input_path`
-/// leaves `XDG_CONFIG_DIRS` alone on the strength of that rule. Honouring one
-/// would resolve `worktrunk/config.toml` against the process cwd — a repo the
-/// user may have just cloned — and load it into the *user* config layer, whose
-/// hooks and aliases the approval gate doesn't cover.
+/// A relative `XDG_CONFIG_DIRS` entry must not become a system config path:
+/// it would resolve `worktrunk/config.toml` against the process cwd and load
+/// that repo's file into the *user* config layer, which the approval gate
+/// doesn't cover.
 #[cfg(unix)]
 #[rstest]
 fn test_system_config_ignores_relative_xdg_config_dirs(repo: TestRepo, temp_home: TempDir) {
-    // `config show` renders the system-config hint only after a user config it
-    // could find, so plant one — otherwise the assertions below hold over
-    // output that says nothing about system config at all.
+    // `config show` reaches the system-config hint only after a user config it
+    // could find, so plant one.
     let global_config_dir = temp_home.path().join(".config").join("worktrunk");
     fs::create_dir_all(&global_config_dir).unwrap();
     fs::write(
@@ -533,8 +529,7 @@ fn test_system_config_ignores_relative_xdg_config_dirs(repo: TestRepo, temp_home
     )
     .unwrap();
 
-    // The file a relative entry would reach: `./worktrunk/config.toml` under
-    // the directory wt runs in.
+    // The file `XDG_CONFIG_DIRS=.` would reach.
     let planted = repo.root_path().join("worktrunk");
     fs::create_dir_all(&planted).unwrap();
     fs::write(
@@ -554,8 +549,7 @@ fn test_system_config_ignores_relative_xdg_config_dirs(repo: TestRepo, temp_home
     let output = cmd.output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    // The hint names the platform default the all-relative value fell back to,
-    // so it pins the fallback as well as the absence of the planted file.
+    // The hint names the platform default, so this pins the fallback too.
     assert!(
         !stdout.contains("SYSTEM CONFIG")
             && !stdout.contains("/planted/")

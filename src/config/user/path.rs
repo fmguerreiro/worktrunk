@@ -137,10 +137,8 @@ pub fn system_config_path() -> Option<PathBuf> {
         return None;
     }
 
-    // Priority 2+3: Check XDG_CONFIG_DIRS (if set), otherwise platform defaults.
-    // When XDG_CONFIG_DIRS names at least one absolute directory,
-    // system_config_dirs() returns only those dirs (per XDG spec, no fallback
-    // to platform defaults).
+    // Priority 2+3: XDG_CONFIG_DIRS when it names an absolute directory
+    // (exclusively, per XDG spec), otherwise platform defaults.
     //
     // Deliberately unguarded, unlike `config_path()`: this resolves a
     // machine-wide file (`/etc/xdg`, `/Library/Application Support`) rather than
@@ -178,18 +176,9 @@ pub fn default_system_config_path() -> Option<PathBuf> {
 /// absolute — returns platform-specific defaults (macOS: `/Library/Application
 /// Support`, Windows: `%PROGRAMDATA%`, Unix: `/etc/xdg`).
 ///
-/// A relative entry is dropped, as the XDG spec requires ("If an
-/// implementation encounters a relative path in any of these variables it
-/// should consider the path invalid and ignore it") and as `etcetera` already
-/// does for the `XDG_*_HOME` variables it resolves for us. wt has to apply the
-/// rule by hand here only because no `etcetera` accessor covers
-/// `XDG_CONFIG_DIRS`. Dropping the entry is what keeps
-/// [`resolve_input_path`]'s reasoning true —
-/// "an XDG config directory is already absolute" — and it matters more here
-/// than elsewhere: this file loads into the *user* config layer, whose hooks
-/// and aliases the approval gate deliberately doesn't cover, so a relative
-/// entry would let `worktrunk/config.toml` under the process cwd, in a repo
-/// the user may have just cloned, run commands unapproved.
+/// Relative entries are dropped, which is what the XDG spec asks for and what
+/// `etcetera` does for the `XDG_*_HOME` variables it resolves for us; it
+/// exposes no accessor for `XDG_CONFIG_DIRS`, so the rule is applied here.
 fn system_config_dirs() -> Vec<PathBuf> {
     #[cfg(unix)]
     if let Ok(dirs_str) = std::env::var("XDG_CONFIG_DIRS") {
