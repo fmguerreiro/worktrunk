@@ -155,6 +155,22 @@ pub fn is_user_project_override_key(key: &str) -> bool {
         .any(|k| k == key)
 }
 
+/// Refuse to write a config file that is not valid TOML.
+///
+/// wt can't load such a file: every later command skips user config with a
+/// warning, and the commands that need project config fail, until the user
+/// hand-edits it. Both writers of a config file the user owns check the
+/// content they are about to write: the `UserConfig` mutations and
+/// `wt config update`. Neither starts from invalid TOML, so this fires only when
+/// the edit itself broke the syntax, and the file on disk stays as it was.
+pub fn ensure_config_parses(content: &str) -> Result<(), ConfigError> {
+    content.parse::<toml::Table>().map(|_| ()).map_err(|e| {
+        ConfigError(format!(
+            "Refusing to write a config file wt could not read back: {e}"
+        ))
+    })
+}
+
 // Re-export public types
 pub use approvals::{Approvals, approvals_path, require_approvals_path};
 pub use commands::{Command, CommandConfig, HookStep, append_aliases};
@@ -166,7 +182,7 @@ pub use deprecation::compute_migrated_content;
 pub use deprecation::copy_approved_commands_to_approvals_file;
 pub use deprecation::format_deprecation_details;
 pub use deprecation::format_deprecation_warnings;
-pub use deprecation::format_migration_diff;
+pub use deprecation::format_migration_diff_block;
 pub use deprecation::migrate_content;
 pub use deprecation::normalize_template_vars;
 pub use deprecation::suppress_warnings;
@@ -191,7 +207,7 @@ pub use project::{
     ProjectForgeConfig, ProjectListConfig, valid_project_config_keys,
 };
 pub use unknown_tree::{
-    UnknownAnalysis, UnknownTree, UnknownWarning, collect_unknown_warnings, compute_unknown_tree,
+    UnknownTree, UnknownWarning, collect_unknown_warnings, compute_unknown_tree,
 };
 pub use user::LoadError;
 pub(crate) use user::project_match::matching_keys as matching_project_keys;
@@ -213,6 +229,16 @@ mod tests {
 
     fn test_repo() -> TestRepo {
         TestRepo::new()
+    }
+
+    #[test]
+    fn test_ensure_config_parses_rejects_a_header_holding_the_key_decor() {
+        // The shape an inline-to-table rewrite once wrote: the key's leading
+        // comment rendered inside the brackets.
+        let err =
+            ensure_config_parses("[# why squash is off\nmerge ]\nsquash = true\n").unwrap_err();
+        assert!(err.0.contains("could not read back"), "{}", err.0);
+        ensure_config_parses("# why squash is off\n[merge]\nsquash = true\n").unwrap();
     }
 
     #[test]
@@ -598,17 +624,11 @@ task2 = "echo 'Task 2 running' > task2.txt"
     }
 
     fn project_warn_tree(contents: &str) -> UnknownTree {
-        compute_unknown_tree::<ProjectConfig>(contents)
-            .warn_tree()
-            .cloned()
-            .unwrap()
+        compute_unknown_tree::<ProjectConfig>(contents).unwrap()
     }
 
     fn user_warn_tree(contents: &str) -> UnknownTree {
-        compute_unknown_tree::<UserConfig>(contents)
-            .warn_tree()
-            .cloned()
-            .unwrap()
+        compute_unknown_tree::<UserConfig>(contents).unwrap()
     }
 
     #[test]
@@ -654,16 +674,8 @@ task2 = "echo 'Task 2 running' > task2.txt"
     #[test]
     fn test_unknown_tree_invalid_toml() {
         let toml = "this is not valid toml {{{";
-        assert!(
-            compute_unknown_tree::<ProjectConfig>(toml)
-                .warn_tree()
-                .is_none()
-        );
-        assert!(
-            compute_unknown_tree::<UserConfig>(toml)
-                .warn_tree()
-                .is_none()
-        );
+        assert!(compute_unknown_tree::<ProjectConfig>(toml).is_none());
+        assert!(compute_unknown_tree::<UserConfig>(toml).is_none());
     }
 
     #[test]

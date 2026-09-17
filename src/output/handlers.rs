@@ -925,7 +925,12 @@ fn flag_note(
 ///
 /// # Warning Message Format
 ///
-/// Uses the standard "Cannot change directory — {reason}" pattern.
+/// Uses the standard "Worktree for X @ path, but cannot change directory —
+/// {reason}" pattern, the same shape `wt switch` uses for an existing worktree.
+/// Naming the destination matters more here than anywhere else: the removal
+/// deleted the directory the caller is standing in, and unless a post-merge or
+/// post-remove hook announcement happens to name its working directory, no
+/// other line of the run prints a path to move to.
 /// See [`compute_shell_warning_reason`] for the full list of reasons.
 fn print_switch_message_if_changed(
     changed_directory: bool,
@@ -958,9 +963,9 @@ fn print_switch_message_if_changed(
         // Running as `git wt` - explain why cd can't work
         eprintln!(
             "{}",
-            warning_message(
-                "Cannot change directory — ran git wt; running through git prevents cd",
-            )
+            warning_message(cformat!(
+                "Worktree for <bold>{dest_branch}</> @ <bold>{path_display}</>, but cannot change directory — ran git wt; running through git prevents cd"
+            ))
         );
         eprintln!("{}", hint_message(git_subcommand_warning()));
     } else {
@@ -968,7 +973,9 @@ fn print_switch_message_if_changed(
         let reason = compute_shell_warning_reason();
         eprintln!(
             "{}",
-            warning_message(cformat!("Cannot change directory — {reason}"))
+            warning_message(cformat!(
+                "Worktree for <bold>{dest_branch}</> @ <bold>{path_display}</>, but cannot change directory — {reason}"
+            ))
         );
         // Show appropriate hint based on invocation mode
         if super::retired_shell_wrapper_active() {
@@ -1048,7 +1055,10 @@ pub struct SwitchDisplayPaths {
 /// - `AlreadyAt` — user is already in the target directory
 /// - Shell integration IS active — cd will happen automatically
 ///
-/// **Warning format:** `Cannot change directory — {reason}`
+/// **Warning format:** `Existing` shares the switch-to-existing shape,
+/// `Worktree for X @ path, but cannot change directory — {reason}`; `Created`
+/// warns with the bare `Cannot change directory — {reason}`, because the
+/// success line printed above it already names the path.
 ///
 /// See [`compute_shell_warning_reason`] for the full list of reasons.
 ///
