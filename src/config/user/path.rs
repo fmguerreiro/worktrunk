@@ -175,13 +175,26 @@ pub fn default_system_config_path() -> Option<PathBuf> {
 /// path exclusively (per XDG spec) — no fallback to platform defaults.
 /// Otherwise, returns platform-specific defaults (macOS: `/Library/Application
 /// Support`, Windows: `%PROGRAMDATA%`, Unix: `/etc/xdg`).
+///
+/// A relative entry is dropped, as the XDG spec requires ("If an
+/// implementation encounters a relative path in any of these variables it
+/// should consider the path invalid and ignore it") and as `etcetera` already
+/// does for the `XDG_*_HOME` variables it resolves for us. wt has to apply the
+/// rule by hand here only because no `etcetera` accessor covers
+/// `XDG_CONFIG_DIRS`. Dropping the entry is what keeps
+/// [`resolve_input_path`](crate::git::resolve_input_path)'s reasoning true —
+/// "an XDG config directory is already absolute" — and it matters more here
+/// than elsewhere: this file loads into the *user* config layer, whose hooks
+/// and aliases the approval gate deliberately doesn't cover, so a relative
+/// entry would let `worktrunk/config.toml` under the process cwd, in a repo
+/// the user may have just cloned, run commands unapproved.
 fn system_config_dirs() -> Vec<PathBuf> {
     #[cfg(unix)]
     if let Ok(dirs_str) = std::env::var("XDG_CONFIG_DIRS") {
         let dirs: Vec<PathBuf> = dirs_str
             .split(':')
-            .filter(|d| !d.is_empty())
             .map(PathBuf::from)
+            .filter(|d| d.is_absolute())
             .collect();
         if !dirs.is_empty() {
             return dirs;

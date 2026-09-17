@@ -512,6 +512,43 @@ fn test_system_config_found_via_xdg_config_dirs(repo: TestRepo) {
     }
 }
 
+/// A relative `XDG_CONFIG_DIRS` entry must not become a system config path.
+///
+/// The XDG spec says to ignore a relative entry, and `resolve_input_path`
+/// leaves `XDG_CONFIG_DIRS` alone on the strength of that rule. Honouring one
+/// would resolve `worktrunk/config.toml` against the process cwd — a repo the
+/// user may have just cloned — and load it into the *user* config layer, whose
+/// hooks and aliases the approval gate doesn't cover.
+#[cfg(unix)]
+#[rstest]
+fn test_system_config_ignores_relative_xdg_config_dirs(repo: TestRepo, temp_home: TempDir) {
+    // The file a relative entry would reach: `./worktrunk/config.toml` under
+    // the directory wt runs in.
+    let planted = repo.root_path().join("worktrunk");
+    fs::create_dir_all(&planted).unwrap();
+    fs::write(
+        planted.join("config.toml"),
+        "worktree-path = \"/planted/{{ repo }}/{{ branch | sanitize }}\"\n",
+    )
+    .unwrap();
+
+    let mut cmd = wt_command();
+    repo.configure_wt_cmd(&mut cmd);
+    set_temp_home_env(&mut cmd, temp_home.path());
+    set_xdg_config_path(&mut cmd, temp_home.path());
+    cmd.env_remove("WORKTRUNK_SYSTEM_CONFIG_PATH");
+    cmd.env("XDG_CONFIG_DIRS", ".");
+    cmd.arg("config").arg("show").current_dir(repo.root_path());
+
+    let output = cmd.output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        !stdout.contains("SYSTEM CONFIG") && !stdout.contains("/planted/"),
+        "A relative XDG_CONFIG_DIRS entry must not load a system config, got:\n{stdout}"
+    );
+}
+
 #[rstest]
 fn test_system_config_xdg_dirs_set_but_no_config_found(repo: TestRepo) {
     // When XDG_CONFIG_DIRS is set but contains no worktrunk config,
