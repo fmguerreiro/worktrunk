@@ -5621,8 +5621,9 @@ fn test_plugin_layout_is_consolidated() {
 ///   bareword puts the line in command mode, where the quoted path is just an
 ///   argument. `call` then keeps cmd's own `/C` quote-stripping off a path with
 ///   a space in it — that rule fires only when the command line *starts* with a
-///   quote — and `/d` keeps a user's `AutoRun` out of a hook whose stdout Codex
-///   reads back as context.
+///   quote — and `/d` keeps a user's `AutoRun` out of the cmd hop this line
+///   spawns, whose stdout Codex reads back as context. Only that hop: the outer
+///   cmd Codex spawns passes no `/d`, so on a cmd session AutoRun still runs.
 /// - It carries no cmd-only control flow. `|| exit /b 0` is a PowerShell parse
 ///   error (`exit` takes an expression, and 5.1 has no `||` at all), and a parse
 ///   error loses the whole line, marker included. `hooks/wt.cmd` absorbs the
