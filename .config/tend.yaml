@@ -29,8 +29,6 @@ secrets:
   allowed:
   - CODECOV_TOKEN
 workflows:
-  codex-auth-refresh:
-    enabled: false
   ci-fix:
     watched_workflows:
     - ci
