@@ -1,4 +1,6 @@
 bot_name: worktrunk-bot
+harness: codex
+model: gpt-6-sol
 setup:
 - uses: ./.github/actions/tend-setup
 # tend 0.2.14 deprecated `sandbox_setup:` and runs its commands as an ordinary
