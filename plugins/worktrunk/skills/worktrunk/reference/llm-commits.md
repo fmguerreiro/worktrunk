@@ -21,10 +21,22 @@ command = "MAX_THINKING_TOKENS=0 claude -p --no-session-persistence --model=haik
 ```toml
 # ~/.config/worktrunk/config.toml
 [commit.generation]
+command = "codex exec -m gpt-6-luna -c model_reasoning_effort='none' -c project_doc_max_bytes=0 --ephemeral --sandbox=read-only --json - | jq -sr '[.[] | select(.item.type? == \"agent_message\")] | last.item.text'"
+```
+
+The command keeps user settings and authentication, limits project instructions, and skips session persistence. Codex can still load global `AGENTS.md` instructions and its own agent context, so a short commit prompt can use thousands of input tokens. Requires `jq` for JSON parsing. See [Codex CLI docs](https://developers.openai.com/codex/cli/).
+
+### Smaller Codex context
+
+For the default OpenAI provider, this optional command also skips user configuration and disables tools that commit generation does not use:
+
+```toml
+# ~/.config/worktrunk/config.toml
+[commit.generation]
 command = "codex exec --strict-config -m gpt-6-luna -c model_reasoning_effort='none' -c project_doc_max_bytes=0 -c features.goals=false -c agents.enabled=false -c web_search=disabled -c features.image_generation=false -c features.view_image=false -c features.shell_tool=false -c features.unified_exec=false -c features.apps=false -c features.plugins=false -c features.browser_use=false -c features.in_app_browser=false --ignore-user-config --ignore-rules --ephemeral --sandbox=read-only --json - | jq -sr '[.[] | select(.item.type? == \"agent_message\")] | last.item.text'"
 ```
 
-`codex exec` still starts a coding agent. These flags remove reasoning, project instructions, most tools, user configuration, execution rules, and session persistence while retaining authentication; `--strict-config` rejects unsupported settings. Global `AGENTS.md` and built-in instructions can still add thousands of input tokens. Requires `jq` for JSON parsing. See [Codex CLI docs](https://developers.openai.com/codex/cli/).
+`--ignore-user-config` keeps authentication but drops custom model-provider and endpoint settings. `--strict-config` rejects a setting that the installed Codex version does not recognize. Global `AGENTS.md` can still load; a direct API client avoids Codex agent context entirely.
 
 ### Other tools
 
