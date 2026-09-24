@@ -33,10 +33,10 @@ command = "MAX_THINKING_TOKENS=0 claude -p --no-session-persistence --model=haik
 ```toml
 # ~/.config/worktrunk/config.toml
 [commit.generation]
-command = "codex exec -m gpt-5.6-luna -c model_reasoning_effort='low' -c system_prompt='' --sandbox=read-only --json - | jq -sr '[.[] | select(.item.type? == \"agent_message\")] | last.item.text'"
+command = "codex exec --strict-config -m gpt-6-luna -c model_reasoning_effort='none' -c project_doc_max_bytes=0 -c features.goals=false -c agents.enabled=false -c web_search=disabled -c features.image_generation=false -c features.view_image=false -c features.shell_tool=false -c features.unified_exec=false -c features.apps=false -c features.plugins=false -c features.browser_use=false -c features.in_app_browser=false --ignore-user-config --ignore-rules --ephemeral --sandbox=read-only --json - | jq -sr '[.[] | select(.item.type? == \"agent_message\")] | last.item.text'"
 ```
 
-Uses the fast, low-cost variant of the current Codex model family with low reasoning effort and an empty system prompt for faster output. Requires `jq` for JSON parsing. See [Codex CLI docs](https://developers.openai.com/codex/cli/).
+`codex exec` still starts a coding agent. These flags remove reasoning, project instructions, most tools, user configuration, execution rules, and session persistence while retaining authentication; `--strict-config` rejects unsupported settings. Global `AGENTS.md` and built-in instructions can still add thousands of input tokens. Requires `jq` for JSON parsing. See [Codex CLI docs](https://developers.openai.com/codex/cli/).
 
 ### Other tools
 

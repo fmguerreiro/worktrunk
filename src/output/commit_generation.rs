@@ -262,7 +262,7 @@ mod tests {
     #[test]
     fn test_llm_tool_recommended_config() {
         assert_snapshot!(LlmTool::Claude.recommended_config(), @"MAX_THINKING_TOKENS=0 claude -p --no-session-persistence --model=haiku --tools='' --safe-mode --setting-sources='user' --system-prompt=''");
-        assert_snapshot!(LlmTool::Codex.recommended_config(), @r#"codex exec -m gpt-5.6-luna -c model_reasoning_effort='low' -c system_prompt='' --sandbox=read-only --json - | jq -sr '[.[] | select(.item.type? == "agent_message")] | last.item.text'"#);
+        assert_snapshot!(LlmTool::Codex.recommended_config(), @r#"codex exec --strict-config -m gpt-6-luna -c model_reasoning_effort='none' -c project_doc_max_bytes=0 -c features.goals=false -c agents.enabled=false -c web_search=disabled -c features.image_generation=false -c features.view_image=false -c features.shell_tool=false -c features.unified_exec=false -c features.apps=false -c features.plugins=false -c features.browser_use=false -c features.in_app_browser=false --ignore-user-config --ignore-rules --ephemeral --sandbox=read-only --json - | jq -sr '[.[] | select(.item.type? == "agent_message")] | last.item.text'"#);
         assert_snapshot!(LlmTool::OpenCode.recommended_config(), @"opencode run -m anthropic/claude-haiku-4.5 --variant fast");
     }
 
