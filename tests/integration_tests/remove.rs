@@ -3709,6 +3709,45 @@ fn test_remove_background_fallback_force_delete_branch(mut repo: TestRepo) {
     let _ = std::fs::remove_file(&staged_path);
 }
 
+/// The force-delete fallback must pass a flag-like branch after `--`. Git
+/// accepts such refs through plumbing, even though its branch parser cannot
+/// create or delete them without an option separator.
+#[rstest]
+fn test_remove_background_fallback_force_deletes_flag_like_branch(mut repo: TestRepo) {
+    repo.commit("initial");
+    let worktree_path = repo.add_worktree("flag-like-holder");
+    repo.run_git(&["update-ref", "refs/heads/-x", "HEAD"]);
+    repo.run_git_in(&worktree_path, &["symbolic-ref", "HEAD", "refs/heads/-x"]);
+    repo.run_git(&["branch", "-D", "flag-like-holder"]);
+    let staged_path = block_staged_rename(&repo, &worktree_path);
+
+    let output = repo
+        .wt_command()
+        .args(["remove", "--force", "-D", worktree_path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "wt remove --force -D should start the legacy fallback: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    crate::common::wait_for("flag-like worktree removed by legacy fallback", || {
+        !worktree_path.exists()
+    });
+    crate::common::wait_for("flag-like branch force-deleted by legacy fallback", || {
+        !repo
+            .git_command()
+            .args(["show-ref", "--verify", "--quiet", "refs/heads/-x"])
+            .run()
+            .unwrap()
+            .status
+            .success()
+    });
+
+    let _ = std::fs::remove_file(&staged_path);
+}
+
 /// The rename-failure fallback removes a detached-HEAD worktree with no branch
 /// to delete — the `_` arm of the fallback command builder. `wt remove` resolves
 /// the detached worktree by path.
@@ -4256,6 +4295,107 @@ fn test_remove_worktree_submodule_dirty_fails_closed(mut repo: TestRepo) {
         std::fs::read_to_string(worktree_path.join("tracked.txt")).unwrap(),
         "DIRTIED\n",
         "the post-check modification must be intact (not destroyed)"
+    );
+}
+
+/// `submodule.<name>.ignore=all` is a display preference, not permission to
+/// delete modifications inside an initialized submodule. This is especially
+/// important because Worktrunk must internally force Git's worktree removal
+/// when initialized submodules are present.
+#[rstest]
+fn test_remove_refuses_dirty_submodule_hidden_by_user_config(mut repo: TestRepo) {
+    let sub_source = repo.root_path().parent().unwrap().join("sub-source-hidden");
+    fs::create_dir_all(&sub_source).unwrap();
+    repo.run_git_in(&sub_source, &["init", "-b", "main"]);
+    fs::write(sub_source.join("sub.txt"), "submodule content").unwrap();
+    repo.run_git_in(&sub_source, &["add", "sub.txt"]);
+    repo.run_git_in(&sub_source, &["commit", "-m", "sub init"]);
+
+    let output = repo
+        .git_command()
+        .args([
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            sub_source.to_str().unwrap(),
+            "submod",
+        ])
+        .run()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "Failed to add submodule: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    repo.run_git(&["commit", "-m", "add submodule"]);
+
+    let worktree_path = repo.add_worktree("feature-submod-hidden-dirty");
+    let output = repo
+        .git_command()
+        .current_dir(&worktree_path)
+        .args([
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "update",
+            "--init",
+        ])
+        .run()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "Failed to init submodule: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    repo.run_git(&["config", "submodule.submod.ignore", "all"]);
+    let changed_file = worktree_path.join("submod/sub.txt");
+    fs::write(&changed_file, "DIRTIED\n").unwrap();
+
+    let hidden = repo
+        .git_command()
+        .current_dir(&worktree_path)
+        .args(["status", "--porcelain"])
+        .run()
+        .unwrap();
+    assert!(
+        hidden.stdout.is_empty(),
+        "the fixture must demonstrate that the user setting hides the dirty submodule"
+    );
+    let forced = repo
+        .git_command()
+        .current_dir(&worktree_path)
+        .args(["status", "--porcelain", "--ignore-submodules=none"])
+        .run()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&forced.stdout).contains("submod"),
+        "the explicit safety query must reveal the dirty submodule"
+    );
+
+    let output = repo
+        .wt_command()
+        .args(["remove", "--foreground", "feature-submod-hidden-dirty"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "remove must refuse a dirty submodule hidden by config; stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("submod"),
+        "the refusal must name the dirty submodule; stderr:\n{stderr}"
+    );
+    assert!(
+        worktree_path.exists(),
+        "the hidden dirty submodule's worktree must be preserved"
+    );
+    assert_eq!(
+        fs::read_to_string(changed_file).unwrap(),
+        "DIRTIED\n",
+        "the hidden submodule change must remain recoverable"
     );
 }
 
