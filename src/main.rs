@@ -419,12 +419,7 @@ fn handle_step_command(
             }
             Ok(())
         }
-        StepCommand::Prune {
-            dry_run,
-            min_age,
-            foreground,
-            format,
-        } => step_prune(dry_run, yes, &min_age, foreground, format),
+        StepCommand::Prune(args) => step_prune(args, yes),
         StepCommand::Relocate {
             branches,
             dry_run,
@@ -957,6 +952,7 @@ fn dispatch_command(
         Commands::List(args) => handle_list_command(args),
         Commands::Switch(args) => handle_switch_command(args, yes),
         Commands::Remove(args) => handle_remove_command(args, yes),
+        Commands::Prune(args) => step_prune(args, yes),
         Commands::Merge(args) => handle_merge_command(args, yes),
         // `working_dir` is the top-level `-C <path>` flag, applied as the
         // child's current directory so global `-C` works for custom

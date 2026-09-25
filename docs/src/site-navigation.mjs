@@ -12,6 +12,7 @@ export const sidebar = [
       { label: 'wt list', link: '/list/' },
       { label: 'wt merge', link: '/merge/' },
       { label: 'wt remove', link: '/remove/' },
+      { label: 'wt prune', link: '/prune/' },
       { label: 'wt config', link: '/config/' },
       { label: 'wt step', link: '/step/' },
       { label: 'wt hook', link: '/hook/' },

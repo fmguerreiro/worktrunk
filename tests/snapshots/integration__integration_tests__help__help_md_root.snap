@@ -49,6 +49,7 @@ Commands:
   switch  Switch to a worktree; create if needed
   list    List worktrees and their status
   remove  Remove worktree; delete branch if merged
+  prune   Remove worktrees and branches merged into the default branch
   merge   Merge current branch into the target branch
   step    Run individual operations
   hook    Run configured hooks

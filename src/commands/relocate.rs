@@ -170,7 +170,7 @@ pub fn gather_candidates(
                 bail!(
                     "{}",
                     cformat!(
-                        "Cannot relocate worktree @ {} — it is stale; to clear the entry, run <bold>wt step prune</>",
+                        "Cannot relocate worktree @ {} — it is stale; to clear the entry, run <bold>wt prune</>",
                         format_path_for_display(&path)
                     )
                 );

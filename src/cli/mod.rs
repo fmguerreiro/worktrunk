@@ -12,7 +12,7 @@ pub(crate) use config::{
 };
 pub(crate) use hook::{HOOK_TYPE_NAMES, HookCommand, HookOptions, parse_hook_type};
 pub(crate) use list::ListSubcommand;
-pub(crate) use step::StepCommand;
+pub(crate) use step::{PruneArgs, StepCommand};
 
 use clap::builder::styling::{AnsiColor, Color, Styles};
 use clap::{Args, Command, CommandFactory, Parser, Subcommand, ValueEnum};
@@ -1336,6 +1336,8 @@ The 'same commit' check uses the local default branch; for other checks, 'target
 
 Branches matching these conditions and with empty working trees are dimmed in `wt list` as safe to delete.
 
+To remove every integrated worktree & branch in one pass, run [`wt prune`](/prune/).
+
 ## Force flags
 
 Worktrunk has two force flags for different situations:
@@ -1403,10 +1405,49 @@ Detached worktrees have no branch name. Pass the worktree path instead: `wt remo
 
 ## See also
 
+- [`wt prune`](/prune/) — Remove all integrated worktrees & branches
 - [`wt merge`](/merge/) — Remove worktree after merging
 - [`wt list`](/list/) — View all worktrees
 "#)]
     Remove(RemoveArgs),
+
+    /// Remove worktrees and branches merged into the default branch
+    #[command(
+        after_long_help = r#"Bulk-removes worktrees and branches that are integrated into the default branch, using the same criteria as `wt remove`'s branch cleanup. Stale worktree entries are cleaned up too, except one whose git metadata holds staged changes or an operation in progress; `git worktree repair` can still restore those.
+
+In `wt list`, candidates show `_` (same commit) or `⊂` (content integrated). Run `--dry-run` to preview. See `wt remove --help` for the full integration criteria.
+
+Locked worktrees, worktrees with uncommitted changes, and the main worktree are always skipped. The current worktree is removed last, triggering cd to the primary worktree. Pre-remove and post-remove hooks run for each removal; a candidate whose hooks include an unapproved project command is skipped with `(approval required)` (pre-approve with `wt config approvals add`, or pass `--yes`).
+
+## Min-age guard
+
+Candidates younger than `--min-age` (default: 1 day) are skipped. A worktree's age comes from its creation time. A branch with no worktree takes its age from its oldest reflog entry, or, when it has none (common in bare repositories), from when git last wrote its ref. Operations such as `git gc` or deleting a branch can rewrite many refs at once, so afterwards older branches without a reflog are skipped until `--min-age` has passed. This prevents removing a worktree just created from the default branch: it looks "merged" because its branch points at the same commit.
+
+```console
+$ wt prune --min-age=0s     # no age guard
+$ wt prune --min-age=2d     # skip candidates younger than 2 days
+```
+
+## JSON output
+
+`--format=json` prints one object per candidate to stdout. A live run reports `branch_outcome`, as [`wt remove`](/remove/#json-output) does. `--dry-run` reports `branch_deleted` (whether the removal would delete the branch), `reason` (why the candidate qualifies), and `target` (what it was measured against).
+
+## Examples
+
+Preview what would be removed:
+
+```console
+$ wt prune --dry-run
+```
+
+Remove all merged worktrees:
+
+```console
+$ wt prune
+```
+"#
+    )]
+    Prune(PruneArgs),
 
     /// Merge current branch into the target branch
     ///

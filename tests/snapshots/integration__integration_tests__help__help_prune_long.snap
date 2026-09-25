@@ -1,0 +1,114 @@
+---
+source: tests/integration_tests/help.rs
+info:
+  program: wt
+  args:
+    - prune
+    - "--help"
+  env:
+    CLICOLOR_FORCE: "1"
+    COLUMNS: "500"
+    GIT_ALLOW_PROTOCOL: file
+    GIT_CONFIG_COUNT: "2"
+    GIT_CONFIG_GLOBAL: /nonexistent/wt/gitconfig
+    GIT_CONFIG_KEY_0: user.useConfigOnly
+    GIT_CONFIG_KEY_1: rerere.enabled
+    GIT_CONFIG_SYSTEM: /nonexistent/wt/gitconfig
+    GIT_CONFIG_VALUE_0: "true"
+    GIT_CONFIG_VALUE_1: "false"
+    LANG: C
+    LC_ALL: C
+    LLVM_PROFILE_FILE: "[LLVM_PROFILE_FILE]"
+    TERM: alacritty
+    WORKTRUNK_APPROVALS_PATH: "[TEST_APPROVALS]"
+    WORKTRUNK_CONFIG_PATH: "[TEST_CONFIG]"
+    WORKTRUNK_SYSTEM_CONFIG_PATH: "[TEST_SYSTEM_CONFIG]"
+    WORKTRUNK_TEST_BASH_INSTALLED: "0"
+    WORKTRUNK_TEST_CLAUDE_INSTALLED: "0"
+    WORKTRUNK_TEST_CODEX_INSTALLED: "0"
+    WORKTRUNK_TEST_DELAYED_STREAM_MS: "-1"
+    WORKTRUNK_TEST_EPOCH: "1735776000"
+    WORKTRUNK_TEST_FISH_INSTALLED: "0"
+    WORKTRUNK_TEST_GEMINI_INSTALLED: "0"
+    WORKTRUNK_TEST_NUSHELL_ENV: "0"
+    WORKTRUNK_TEST_OPENCODE_INSTALLED: "0"
+    WORKTRUNK_TEST_PARENT_SHELL: ""
+    WORKTRUNK_TEST_POWERSHELL_ENV: "0"
+    WORKTRUNK_TEST_POWERSHELL_INSTALLED: "0"
+    WORKTRUNK_TEST_PROBE_TIMEOUT_MS: "60000"
+    WORKTRUNK_TEST_SKIP_URL_HEALTH_CHECK: "1"
+    WORKTRUNK_TEST_ZSH_INSTALLED: "0"
+---
+success: true
+exit_code: 0
+----- stdout -----
+wt prune - Remove worktrees and branches merged into the default branch
+
+Usage: [1m[36mwt prune[0m [36m[OPTIONS][0m
+
+[1m[32mOptions:[0m
+      [1m[36m--dry-run[0m
+          Show what would be removed
+
+      [1m[36m--min-age[0m[36m [0m[36m<MIN_AGE>[0m
+          Skip worktrees and branches younger than this
+          
+          [default: 1d]
+
+      [1m[36m--foreground[0m
+          Run removal in foreground (block until complete)
+
+      [1m[36m--format[0m[36m [0m[36m<FORMAT>[0m
+          Output format
+          
+          [default: text]
+          [possible values: text, json]
+
+  [1m[36m-h[0m, [1m[36m--help[0m
+          Print help (see a summary with '-h')
+
+[1m[32mGlobal Options:[0m
+  [1m[36m-C[0m[36m [0m[36m<path>[0m
+          Working directory for this command
+
+      [1m[36m--config[0m[36m [0m[36m<path>[0m
+          User config file path
+
+      [1m[36m--config-set[0m[36m [0m[36m<toml>[0m
+          Override config with inline TOML, e.g. --config-set list.full=true (repeatable)
+
+  [1m[36m-v[0m, [1m[36m--verbose[0m[36m...[0m
+          Verbose output (-v: info logs + hook/alias template variables on stderr; -vv: also debug logs and raw subprocess output written to .git/wt/logs/). Set WORKTRUNK_VERBOSE=0|1|2 to apply the same level everywhere — including shell completion, which no flag can reach
+
+  [1m[36m-y[0m, [1m[36m--yes[0m
+          Skip approval prompts
+
+Bulk-removes worktrees and branches that are integrated into the default branch, using the same criteria as [2mwt remove[0m's branch cleanup. Stale worktree entries are cleaned up too, except one whose git metadata holds staged changes or an operation in progress; [2mgit worktree repair[0m can still restore those.
+
+In [2mwt list[0m, candidates show [2m_[0m (same commit) or [2m⊂[0m (content integrated). Run [2m--dry-run[0m to preview. See [2mwt remove --help[0m for the full integration criteria.
+
+Locked worktrees, worktrees with uncommitted changes, and the main worktree are always skipped. The current worktree is removed last, triggering cd to the primary worktree. Pre-remove and post-remove hooks run for each removal; a candidate whose hooks include an unapproved project command is skipped with [2m(approval required)[0m (pre-approve with [2mwt config approvals add[0m, or pass [2m--yes[0m).
+
+[1m[32mMin-age guard[0m
+
+Candidates younger than [2m--min-age[0m (default: 1 day) are skipped. A worktree's age comes from its creation time. A branch with no worktree takes its age from its oldest reflog entry, or, when it has none (common in bare repositories), from when git last wrote its ref. Operations such as [2mgit gc[0m or deleting a branch can rewrite many refs at once, so afterwards older branches without a reflog are skipped until [2m--min-age[0m has passed. This prevents removing a worktree just created from the default 
+branch: it looks "merged" because its branch points at the same commit.
+
+[107m [0m [2m[0m[2m[34mwt[0m[2m prune [0m[2m[36m--min-age=0s[0m[2m     # no age guard[0m
+[107m [0m [2m[0m[2m[34mwt[0m[2m prune [0m[2m[36m--min-age=2d[0m[2m     # skip candidates younger than 2 days[0m
+
+[1m[32mJSON output[0m
+
+[2m--format=json[0m prints one object per candidate to stdout. A live run reports [2mbranch_outcome[0m, as [2mwt remove[0m does. [2m--dry-run[0m reports [2mbranch_deleted[0m (whether the removal would delete the branch), [2mreason[0m (why the candidate qualifies), and [2mtarget[0m (what it was measured against).
+
+[1m[32mExamples[0m
+
+Preview what would be removed:
+
+[107m [0m [2m[0m[2m[34mwt[0m[2m prune [0m[2m[36m--dry-run[0m
+
+Remove all merged worktrees:
+
+[107m [0m [2m[0m[2m[34mwt[0m[2m prune[0m
+
+----- stderr -----

@@ -53,6 +53,8 @@ The 'same commit' check uses the local default branch; for other checks, 'target
 
 Branches matching these conditions and with empty working trees are dimmed in `wt list` as safe to delete.
 
+To remove every integrated worktree & branch in one pass, run [`wt prune`](https://worktrunk.dev/prune/).
+
 ## Force flags
 
 Worktrunk has two force flags for different situations:

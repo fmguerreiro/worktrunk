@@ -93,6 +93,7 @@ fn test_merge_help_describes_exact_shape_no_rebase() {
 #[case("help_switch_long", "switch --help")]
 #[case("help_remove_short", "remove -h")]
 #[case("help_remove_long", "remove --help")]
+#[case("help_prune_long", "prune --help")]
 #[case("help_merge_short", "merge -h")]
 #[case("help_merge_long", "merge --help")]
 #[case("help_step_short", "step -h")]

@@ -1,4 +1,4 @@
-//! `wt step prune` — remove worktrees and branches integrated into the default branch.
+//! `wt prune` / `wt step prune` — remove worktrees and branches integrated into the default branch.
 //!
 //! Live-path concurrency: candidate checks fan out on the rayon pool and
 //! stream results to the main thread, which queues per-candidate jobs
@@ -981,15 +981,16 @@ fn unapproved_for_hook(
 /// entries (pruned + branch deleted), and orphan branches without worktrees (deleted).
 /// Skips the main/primary worktree, locked worktrees, and worktrees younger than
 /// `min_age`. Removes the current worktree last to trigger cd to primary.
-pub fn step_prune(
-    dry_run: bool,
-    yes: bool,
-    min_age: &str,
-    foreground: bool,
-    format: crate::cli::SwitchFormat,
-) -> anyhow::Result<()> {
+pub fn step_prune(args: crate::cli::PruneArgs, yes: bool) -> anyhow::Result<()> {
+    let crate::cli::PruneArgs {
+        dry_run,
+        min_age,
+        foreground,
+        format,
+    } = args;
+
     let min_age_duration =
-        humantime::parse_duration(min_age).context("Invalid --min-age duration")?;
+        humantime::parse_duration(&min_age).context("Invalid --min-age duration")?;
 
     let repo = Repository::current()?;
     let config = UserConfig::load().context("Failed to load config")?;
@@ -1109,7 +1110,7 @@ pub fn step_prune(
             anyhow::Ok(info)
         })?;
         drop(scan_span);
-        return render_dry_run(dry_run_info, skipped_young, min_age, format);
+        return render_dry_run(dry_run_info, skipped_young, &min_age, format);
     }
 
     // Live path: prune NEVER prompts for hook approval inline. Streaming

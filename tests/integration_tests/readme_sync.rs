@@ -1737,7 +1737,7 @@ fn test_starlight_frontmatter_helpers() {
 /// Each page preserves its frontmatter and replaces the AUTO-GENERATED marker region.
 /// Note: `select` is excluded because it's a deprecated hidden alias for `wt switch`.
 const COMMAND_PAGES: &[&str] = &[
-    "switch", "list", "merge", "remove", "config", "step", "hook",
+    "switch", "list", "merge", "remove", "prune", "config", "step", "hook",
 ];
 
 #[test]

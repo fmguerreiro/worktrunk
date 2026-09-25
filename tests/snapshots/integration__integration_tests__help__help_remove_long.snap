@@ -146,6 +146,8 @@ The 'same commit' check uses the local default branch; for other checks, 'target
 
 Branches matching these conditions and with empty working trees are dimmed in [2mwt list[0m as safe to delete.
 
+To remove every integrated worktree & branch in one pass, run [2mwt prune[0m.
+
 [1m[32mForce flags[0m
 
 Worktrunk has two force flags for different situations:
@@ -209,6 +211,7 @@ Detached worktrees have no branch name. Pass the worktree path instead: [2mwt r
 
 [1m[32mSee also[0m
 
+- [2mwt prune[0m — Remove all integrated worktrees & branches
 - [2mwt merge[0m — Remove worktree after merging
 - [2mwt list[0m — View all worktrees
 
